@@ -1,3 +1,4 @@
+import posixpath
 from urllib import response
 from urllib.parse import urlsplit
 
@@ -21,7 +22,29 @@ from lxml.etree import canonicalize
 
 def makeCanon(toCanon):
     split = urlsplit(toCanon)
-    split.scheme = split.scheme.lower()
+
+    scheme = split.scheme.lower()
+
+    # Takes netloc and removes default ports
+    netloc = split.netloc.lower()
+    if ':' in netloc:
+        splitNetloc = netloc.split(':')
+        if (scheme == 'http' and splitNetloc[1] == "80") or(scheme == 'https' and splitNetloc[1] =="443"):
+            netloc = splitNetloc[0]
+
+    # normalizes path so we do not get repeat pages if the path has variations such as (academic/..../events/calendar
+    # which is not different from events/calendar
+    path = urllib.parse.quote(urllib.parse.unquote(split.path), safe="/-._~")
+    path = posixpath.normpath(path)
+    if path == '.':
+        path = '/'
+
+    query =split.query
+
+    fragment = ''
+
+    return urllib.parse.urlunsplit((scheme, netloc, path, query, fragment))
+
 def crawler(starting):
     pageCount = 0
     budget = 100
@@ -38,11 +61,14 @@ def crawler(starting):
 
         for link in soup.find_all('a') : # loop 2: one link per pass
             toCanon = link.get('href')
-            canon = toCanon
+            canon = makeCanon(toCanon)
             if canon is not None:
 
                 if canon not in seen:
                     seen.add(canon)
                     toScan.append(canon)
                     print(toScan)
-crawler('https://www.kennesaw.edu/')
+# crawler('https://www.kennesaw.edu/') # Commented out till ready to use
+print(makeCanon("https://kennesaw.edu"))
+print(posixpath.normpath("/a/b/../c"), posixpath.normpath("/about/"),
+posixpath.normpath("/"))
