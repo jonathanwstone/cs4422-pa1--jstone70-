@@ -1,6 +1,6 @@
 import posixpath
 from urllib import response
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qsl
 
 import requests
 import bs4
@@ -39,7 +39,16 @@ def makeCanon(toCanon):
     if path == '.':
         path = '/'
 
-    query =split.query
+    query = split.query
+    queryBlockList = ['utm_source','utm_medium','utm_campaign','utm_term']
+    cleanQuery = []
+    queryFix = parse_qsl(query)
+    for item in queryFix:
+        if item[0] not in queryBlockList:
+            cleanQuery.append(item)
+    query = urllib.parse.urlencode(cleanQuery)
+
+
 
     fragment = ''
 
@@ -61,14 +70,14 @@ def crawler(starting):
 
         for link in soup.find_all('a') : # loop 2: one link per pass
             toCanon = link.get('href')
-            canon = makeCanon(toCanon)
+            if toCanon is None:
+                continue
+            else:
+                canon = makeCanon(urllib.parse.urljoin(url, toCanon))
             if canon is not None:
 
                 if canon not in seen:
                     seen.add(canon)
                     toScan.append(canon)
                     print(toScan)
-# crawler('https://www.kennesaw.edu/') # Commented out till ready to use
-print(makeCanon("https://kennesaw.edu"))
-print(posixpath.normpath("/a/b/../c"), posixpath.normpath("/about/"),
-posixpath.normpath("/"))
+crawler('https://www.kennesaw.edu/') # Commented out till ready to use
