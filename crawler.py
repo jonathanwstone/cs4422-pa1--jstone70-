@@ -10,6 +10,7 @@ import urllib.parse
 from collections import deque
 
 from lxml.etree import canonicalize
+from protego import Protego
 
 
 # examples used for earlier testing
@@ -46,6 +47,8 @@ def makeCanon(toCanon):
     for item in queryFix:
         if item[0] not in queryBlockList:
             cleanQuery.append(item)
+
+    cleanQuery.sort()
     query = urllib.parse.urlencode(cleanQuery)
 
 
@@ -53,6 +56,14 @@ def makeCanon(toCanon):
     fragment = ''
 
     return urllib.parse.urlunsplit((scheme, netloc, path, query, fragment))
+def checkRobots(scheme,netloc):
+    robotsCache = {}
+    if netloc in robotsCache:
+        return robotsCache[netloc]
+
+    netloc.append('/robots.txt')
+    request = requests.get(netloc)
+    requestParsed = Protego.parse(request.text)
 
 def crawler(starting):
     pageCount = 0
@@ -72,12 +83,20 @@ def crawler(starting):
             toCanon = link.get('href')
             if toCanon is None:
                 continue
-            else:
-                canon = makeCanon(urllib.parse.urljoin(url, toCanon))
+
+            if toCanon.startswith('#') or toCanon.startswith('mailto:') or toCanon.startswith('javascript:') or toCanon.startswith('tel:'):
+                continue
+
+            absolute = urllib.parse.urljoin(url, toCanon)
+            host = urllib.parse.urlsplit(absolute).netloc
+            if not (host == 'kennesaw.edu' or host.endswith('.kennesaw.edu')):
+                continue
+            canon = makeCanon(absolute)
             if canon is not None:
 
                 if canon not in seen:
                     seen.add(canon)
                     toScan.append(canon)
                     print(toScan)
-crawler('https://www.kennesaw.edu/') # Commented out till ready to use
+
+crawler('https://www.kennesaw.edu/') # Commented out till ready
