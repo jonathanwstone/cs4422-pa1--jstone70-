@@ -1,4 +1,5 @@
 import posixpath
+import time
 from urllib import response
 from urllib.parse import urlsplit, parse_qsl
 
@@ -22,12 +23,13 @@ from protego import Protego
 # print(soup.find_all('a')[:100])
 
 pageCount = 0
-budget = 100
+budget = 10
 toScan = deque()
 seen = set()
 robotsCache = {}
 myInfo = 'CrawlerProject: jstone70@students.kennesaw.edu'
-
+lastFetchTime = {}
+defaultDelay = 1.0
 
 def makeCanon(toCanon):
 
@@ -70,11 +72,11 @@ def makeCanon(toCanon):
     # reform and return full url now canonized
     return urllib.parse.urlunsplit((scheme, netloc, path, query, fragment))
 
-
 def checkRobots(robotsCache,netloc, scheme):
+
     if netloc in robotsCache:
         return robotsCache[netloc]
-
+    enforceDelay(lastFetchTime, netloc, defaultDelay)
     try:
         request = requests.get(f"{scheme}://{netloc}/robots.txt", timeout = 10)
     except requests.exceptions.RequestException:
@@ -93,8 +95,9 @@ def checkRobots(robotsCache,netloc, scheme):
     return robotsCache[netloc]
 
 def crawler(starting, pageCount, budget):
-    toScan.append(starting)
-    seen.add(starting)
+    canonStart = makeCanon(starting)
+    toScan.append(canonStart)
+    seen.add(canonStart)
 
     while len(toScan) != 0 and pageCount < budget:
         url = toScan.popleft()  # Pulls URL out of left side of double ended queue
@@ -102,16 +105,21 @@ def crawler(starting, pageCount, budget):
         robotHost = urllib.parse.urlsplit(url).netloc
         robotScheme = urllib.parse.urlsplit(url).scheme
         robotsResult = checkRobots(robotsCache, robotHost, robotScheme)
-        if robotsResult == 'Denied' or not robotsResult.can_fetch(url, headers = {myInfo}):
+        if robotsResult == 'Denied' or not robotsResult.can_fetch(url, myInfo):
             continue
 
-
+        # calculate and enforce delay
+        siteDelay = robotsResult.crawl_delay(myInfo)
+        requiredDelay = max(defaultDelay, siteDelay or defaultDelay)
+        enforceDelay(lastFetchTime, robotHost, requiredDelay)
         try:
+
             page = requests.get(url, headers={'User-Agent': myInfo})  # sets the page
-        except requests.exceptions.RequestException:
-            continue
         except requests.exceptions.Timeout:
             continue
+        except requests.exceptions.RequestException:
+            continue
+
 
         if not(200<= page.status_code < 300):
             continue
@@ -150,8 +158,17 @@ def crawler(starting, pageCount, budget):
                     seen.add(canon)
                     toScan.append(canon)
 
-                    # Used to make sure objects to scan is growing
-                    # print(toScan)
+
+
+def enforceDelay(lastFetchTime, host, requiredDelay):
+    if host in lastFetchTime:
+        elapsed = time.time() - lastFetchTime[host]
+        if elapsed < requiredDelay:
+            time.sleep(requiredDelay - elapsed)
+
+        lastFetchTime[host] = time.time()
+    else:
+        lastFetchTime[host] = time.time()
 
 crawler('https://www.kennesaw.edu/', pageCount, budget) # Commented out till ready
 
