@@ -89,7 +89,7 @@ def checkRobots(robotsCache,netloc, scheme):
         return robotsCache[netloc]
 
     # If server says we have made too many requests
-    if request.status_code == 429:
+    if request.status_code == 429 or request.status_code == 503:
 
         # Check for a wait time, if there is one cast to int, if not assign 10 and wait to request again
         waitTime = request.headers.get('Retry-After')
@@ -110,7 +110,7 @@ def checkRobots(robotsCache,netloc, scheme):
             return robotsCache[netloc]
 
         # If there is a second 429 error send out as too many requests otherwise pass it on
-        if request.status_code == 429:
+        if request.status_code == 429 or request.status_code == 503:
             robotsCache[netloc] = 'Too many requests'
             return robotsCache[netloc]
 
