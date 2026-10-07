@@ -1,34 +1,21 @@
 # imports
-import datetime
 import hashlib
+import os
 import posixpath
 import time
 import json
 import requests
 import bs4
-import lxml
-import protego
 import urllib.parse
+
 # specific pulls from each import group
-from urllib import response
 from urllib.parse import urlsplit, parse_qsl
 from collections import deque
 from datetime import datetime, timezone
-
-from lxml.etree import canonicalize
 from protego import Protego
 
-
-# examples used for earlier testing
-# page = requests.get('https://www.kennesaw.edu/')
-# page.headers.get('Content-Type')
-# len(page.text)
-# soup = bs4.BeautifulSoup(page.text,'lxml')
-# print(soup.title.string)
-# print(soup.find_all('a')[:100])
-
 pageCount = 0
-budget = 10
+budget = 100
 toScan = deque()
 seen = set()
 robotsCache = {}
@@ -82,20 +69,57 @@ def makeCanon(toCanon):
 # parses and checks robots.txt per netloc to make sure we are following the rules
 def checkRobots(robotsCache,netloc, scheme):
 
+    # Check if robots has already been checked
     if netloc in robotsCache:
         return robotsCache[netloc]
     enforceDelay(lastFetchTime, netloc, defaultDelay)
+
+    #Pull robots.txt
     try:
         request = requests.get(f"{scheme}://{netloc}/robots.txt", timeout = 10)
+
+    # If server timesout
+    except requests.exceptions.Timeout:
+        robotsCache[netloc] = 'Timeout error'
+        return robotsCache[netloc]
+
+    # If access is denied
     except requests.exceptions.RequestException:
         robotsCache[netloc] = 'Denied'
         return robotsCache[netloc]
 
+    # If server says we have made too many requests
+    if request.status_code == 429:
+
+        # Check for a wait time, if there is one cast to int, if not assign 10 and wait to request again
+        waitTime = request.headers.get('Retry-After')
+        if waitTime is None:
+            waitTime = 10
+        else:
+            waitTime = int(waitTime)
+        time.sleep(waitTime)
+
+        # Check again
+        try:
+            request = requests.get(f"{scheme}://{netloc}/robots.txt", timeout=10)
+        except requests.exceptions.Timeout:
+            robotsCache[netloc] = 'Timeout error'
+            return robotsCache[netloc]
+        except requests.exceptions.RequestException:
+            robotsCache[netloc] = 'Denied'
+            return robotsCache[netloc]
+
+        # If there is a second 429 error send out as too many requests otherwise pass it on
+        if request.status_code == 429:
+            robotsCache[netloc] = 'Too many requests'
+            return robotsCache[netloc]
+
+    # Error handling for thrown codes
     if 400 <= request.status_code < 500 and request.status_code != 429:
         requestParsed = Protego.parse(request.text)
         robotsCache[netloc] = requestParsed
     if 500 <= request.status_code:
-        robotsCache[netloc] = 'Denied'
+        robotsCache[netloc] = 'Robots request failed'
     if 200 <= request.status_code < 300 :
         requestParsed = Protego.parse(request.text)
         robotsCache[netloc] = requestParsed
@@ -104,6 +128,7 @@ def checkRobots(robotsCache,netloc, scheme):
 
 # The actual big bad crawler
 def crawler(starting, pageCount, budget):
+    os.makedirs('artifacts', exist_ok = True)
     canonStart = makeCanon(starting)
     toScan.append(canonStart)
     seen.add(canonStart)
@@ -171,7 +196,7 @@ def crawler(starting, pageCount, budget):
                     toScan.append(canon)
         outLinks = list(set(outLinks))
         record = buildRecord(page, soup, url, outLinks)
-        print(record)
+        appendRecord(record)
 
 # Checks for needed delay time based on host or on preset if preset is longer
 def enforceDelay(lastFetchTime, host, requiredDelay):
@@ -194,27 +219,24 @@ def redirectHandler(url, maxHops = 5):
             host = urllib.parse.urlsplit(url).netloc
             enforceDelay(lastFetchTime, host, defaultDelay)
             visited.append(url)
-            if hopCount >= maxHops:
-                return
-            else:
-                try:
+
+            try:
                     check = requests.get(url, headers={'User-Agent': myInfo}, timeout= 10.0, allow_redirects=False)
-                except requests.exceptions.Timeout:
-                    return
-                except requests.exceptions.RequestException:
-                    return
+            except requests.exceptions.Timeout:
+                return
+            except requests.exceptions.RequestException:                    return
 
-                if check.is_redirect or (300 <= check.status_code < 400):
-                    location = check.headers.get('Location')
-                    url = urllib.parse.urljoin(url, location)
+            if check.is_redirect or (300 <= check.status_code < 400):
+                location = check.headers.get('Location')
+                url = urllib.parse.urljoin(url, location)
 
-                    host = urllib.parse.urlsplit(url).netloc
-                    if not (host == 'kennesaw.edu' or host.endswith('.kennesaw.edu')):
-                        return None
+                host = urllib.parse.urlsplit(url).netloc
+                if not (host == 'kennesaw.edu' or host.endswith('.kennesaw.edu')):
+                    return None
 
-                    hopCount += 1
-                else:
-                    return check
+                hopCount += 1
+            else:
+                return check
 
     return None
 
@@ -241,5 +263,15 @@ def buildRecord(page, soup, canon, outLinks):
         'content_hash': hashlib.sha256(normalizedBytes).hexdigest() ,
         'canonical_link': link
     }
+
+def appendRecord(record):
+
+    # Open the path and pages.json
+    with open('artifacts/pages.jsonl', "a") as jsonFile:
+        # Append the record
+        json.dump(record, jsonFile)
+        jsonFile.write("\n")
+
+
 
 crawler('https://www.kennesaw.edu/', pageCount, budget) # Commented out till ready
