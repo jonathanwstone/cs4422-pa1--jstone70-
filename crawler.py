@@ -85,19 +85,20 @@ def checkRobots(robotsCache,netloc, scheme):
 
     # If access is denied
     except requests.exceptions.RequestException:
-        robotsCache[netloc] = 'Denied'
+        robotsCache[netloc] = 'Could not retrieve robots.txt ruleset, request failed'
         return robotsCache[netloc]
 
-    # If server says we have made too many requests
+    # If server says we have made too many requests or server is unavailable
     if request.status_code == 429 or request.status_code == 503:
 
-        # Check for a wait time, if there is one cast to int, if not assign 10 and wait to request again
+        # Check for a wait time, if there is one cast to int, if not assign 10 and wait to
+        # request again, making sure to log time
         waitTime = request.headers.get('Retry-After')
         if waitTime is None:
             waitTime = 10
         else:
             waitTime = int(waitTime)
-        time.sleep(waitTime)
+        enforceDelay(lastFetchTime, netloc, waitTime)
 
         # Check again
         try:
@@ -109,17 +110,16 @@ def checkRobots(robotsCache,netloc, scheme):
             robotsCache[netloc] = 'Denied'
             return robotsCache[netloc]
 
-        # If there is a second 429 error send out as too many requests otherwise pass it on
+        # If there is a second 429/503 error send out as too many requests otherwise pass it on
         if request.status_code == 429 or request.status_code == 503:
-            robotsCache[netloc] = 'Too many requests'
+            robotsCache[netloc] = 'Could not retrieve robots.txt ruleset, request failed'
             return robotsCache[netloc]
 
     # Error handling for thrown codes
     if 400 <= request.status_code < 500 and request.status_code != 429:
-        requestParsed = Protego.parse(request.text)
-        robotsCache[netloc] = requestParsed
+        robotsCache[netloc] = 'Could not retrieve robots.txt ruleset, request failed'
     if 500 <= request.status_code:
-        robotsCache[netloc] = 'Robots request failed'
+        robotsCache[netloc] = 'Could not retrieve robots.txt ruleset, request failed'
     if 200 <= request.status_code < 300 :
         requestParsed = Protego.parse(request.text)
         robotsCache[netloc] = requestParsed
@@ -141,7 +141,7 @@ def crawler(starting, pageCount, budget):
         robotHost = urllib.parse.urlsplit(url).netloc
         robotScheme = urllib.parse.urlsplit(url).scheme
         robotsResult = checkRobots(robotsCache, robotHost, robotScheme)
-        if robotsResult == 'Denied' or not robotsResult.can_fetch(url, myInfo):
+        if isinstance(robotsResult, Protego) == False  or not robotsResult.can_fetch(url, myInfo):
             continue
 
         # calculate and enforce delay
@@ -275,3 +275,6 @@ def appendRecord(record):
 
 
 crawler('https://www.kennesaw.edu/', pageCount, budget) # Commented out till ready
+
+
+
