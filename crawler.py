@@ -13,9 +13,10 @@ from urllib.parse import urlsplit, parse_qsl
 from collections import deque
 from datetime import datetime, timezone
 from protego import Protego
+from email.utils import parsedate_to_datetime
 
 pageCount = 0
-budget = 100
+budget = 5
 toScan = deque()
 seen = set()
 robotsCache = {}
@@ -76,7 +77,7 @@ def checkRobots(robotsCache,netloc, scheme):
 
     #Pull robots.txt
     try:
-        request = requests.get(f"{scheme}://{netloc}/robots.txt", timeout = 10)
+        request = requests.get(f"{scheme}://{netloc}/robots.txt", timeout = 10, headers={'User-Agent': myInfo})
 
     # If server timesout
     except requests.exceptions.Timeout:
@@ -99,15 +100,20 @@ def checkRobots(robotsCache,netloc, scheme):
         if waitTime is None:
             waitTime = 10
         else:
-            waitTime = int(waitTime)
+
+            try:
+                waitTime = int(waitTime)
+            except ValueError:
+                getThis = parsedate_to_datetime(waitTime)
+                waitTime = max(0, (getThis - datetime.now(timezone.utc)).total_seconds())
 
         logEvent('retry', f"{scheme}://{netloc}/robots.txt", failure_reason='429/503, retrying robots.txt',
                  status=request.status_code)
-        enforceDelay(lastFetchTime, netloc, waitTime)
+        time.sleep(waitTime)
 
         # Check again
         try:
-            request = requests.get(f"{scheme}://{netloc}/robots.txt", timeout=10)
+            request = requests.get(f"{scheme}://{netloc}/robots.txt", timeout=10,headers={'User-Agent': myInfo})
         except requests.exceptions.Timeout:
             robotsCache[netloc] = 'Timeout error'
             logEvent('error', f"{scheme}://{netloc}/robots.txt", failure_reason = robotsCache[netloc], status = None)
@@ -142,6 +148,23 @@ def checkRobots(robotsCache,netloc, scheme):
                  status=request.status_code)
         return robotsCache[netloc]
     return robotsCache[netloc]
+
+# Check content length
+def readLimitedResponse(response, maxBytes=5_000_000):
+    byteArray = bytearray()
+    totalBytes = 0
+    try:
+        for chunk in response.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
+            else:
+                totalBytes += len(chunk)
+                if totalBytes > maxBytes:
+                    return None
+            byteArray.extend(chunk)
+        return byteArray
+    finally:
+        response.close()
 
 # The actual big bad crawler
 def crawler(starting, pageCount, budget):
@@ -182,18 +205,25 @@ def crawler(starting, pageCount, budget):
 
         if not(200<= page.status_code < 300):
             logEvent('error', url, failure_reason= "Non 200 response", status = page.status_code)
+            page.close()
             continue
 
         if 'text/html' not in page.headers.get('Content-Type',''):
             logEvent('error', url, failure_reason= 'Non text/html response', status= page.status_code)
+            page.close()
             continue
 
-        content_length = page.headers.get('Content-Length')
-        if content_length and int(content_length) > 5_000_000:
-            logEvent('error', url, failure_reason = 'Content exceeded maximum', status = page.status_code)
+
+
+        contentLengthCheck = readLimitedResponse(page)
+
+
+        if contentLengthCheck is None:
+            logEvent('error', url, failure_reason='Content exceeded maximum', status=page.status_code)
             continue
 
-        soup = bs4.BeautifulSoup(page.text, 'lxml')  # provides the page html to the parser (lxml in this case)
+
+        soup = bs4.BeautifulSoup(bytes(contentLengthCheck), 'lxml')  # provides the page html to the parser (lxml in this case)
                                                              # then makes it readable
         outLinks = []
 
@@ -225,7 +255,7 @@ def crawler(starting, pageCount, budget):
         appendRecord(record)
         pageCount += 1
         logEvent('success', url, status = page.status_code)
-    if pageCount == 500:
+    if pageCount == budget:
         logEvent('complete when page limit reached', canonStart)
     else:
         logEvent('queue exhausted', canonStart)
@@ -246,8 +276,8 @@ def redirectHandler(url, maxHops = 5):
     hopCount = 0
     while hopCount < maxHops:
         if url in visited:
-            logEvent('redirect loop detected', url)
-            return
+            logEvent('error', url, 'redirect loop detected')
+            return None
         else:
             host = urllib.parse.urlsplit(url).netloc
             enforceDelay(lastFetchTime, host, defaultDelay)
@@ -258,36 +288,99 @@ def redirectHandler(url, maxHops = 5):
             visited.append(url)
 
             try:
-                    check = requests.get(url, headers={'User-Agent': myInfo}, timeout= 10.0, allow_redirects=False)
+                    check = requests.get(url, headers={'User-Agent': myInfo}, timeout= 10.0, allow_redirects=False, stream = True)
             except requests.exceptions.Timeout:
                 logEvent('error', url, failure_reason= 'Timeout', status=None)
-                return
+                return None
             except requests.exceptions.RequestException:
                 logEvent('error', url, failure_reason='Exception', status=None)
-                return
+                return None
 
-            if check.is_redirect or (300 <= check.status_code < 400):
+            if 300 <= check.status_code < 400:
 
                 location = check.headers.get('Location')
-                if location != None:
+                if location is not None:
                     url = urllib.parse.urljoin(url, location)
 
                     host = urllib.parse.urlsplit(url).netloc
 
                     if not (host == 'kennesaw.edu' or host.endswith('.kennesaw.edu')):
+                        check.close()
                         return None
 
                     hopCount += 1
+                    check.close()
+                    continue
                 else:
                     logEvent('error', url, failure_reason ='missing location')
+                    check.close()
                     return None
+
+            if check.status_code == 429 or check.status_code == 503:
+
+                # Check for a wait time, if there is one cast to int, if not assign 10 and wait to
+                # request again, making sure to log time
+                waitTime = check.headers.get('Retry-After')
+
+                if waitTime is None:
+                    waitTime = 10
+                else:
+                    try:
+                        waitTime = int(waitTime)
+                    except ValueError:
+                        getThis = parsedate_to_datetime(waitTime)
+                        waitTime = max(0, (getThis - datetime.now(timezone.utc)).total_seconds())
+
+                logEvent('error', url, failure_reason='429/503, retrying',
+                         status=check.status_code)
+                time.sleep(waitTime)
+                check.close()
+
+                # Check again
+                host = urllib.parse.urlsplit(url).netloc
+                try:
+                    check = requests.get(url, headers={'User-Agent': myInfo}, timeout= 10.0, allow_redirects=False, stream = True)
+                except requests.exceptions.Timeout:
+                    logEvent('error', url, failure_reason='Timeout',
+                             status=None)
+                    return None
+                except requests.exceptions.RequestException:
+                    logEvent('error', url, failure_reason='Exception',
+                             status=None)
+                    return None
+
+                if 300 <= check.status_code < 400:
+
+                    location = check.headers.get('Location')
+                    if location != None:
+                        url = urllib.parse.urljoin(url, location)
+
+                        host = urllib.parse.urlsplit(url).netloc
+
+                        if not (host == 'kennesaw.edu' or host.endswith('.kennesaw.edu')):
+                            check.close()
+                            return None
+
+                        hopCount += 1
+                        check.close()
+                        continue
+                    else:
+                        logEvent('error', url, failure_reason='missing location')
+                        check.close()
+                        return None
+
+                if check.status_code != 429 and check.status_code != 503:
+                    return check
+                # If there is a second 429/503 error send out as too many requests otherwise pass it on
+                if check.status_code == 429 or check.status_code == 503:
+                    logEvent('error', url, failure_reason='too many retries',
+                             status=check.status_code)
+                    check.close()
+                    return None
+
             else:
                 return check
-
-
-
-
-
+    logEvent('error', url, failure_reason='exceeded hop counts')
     return None
 
 def buildRecord(page, soup, canon, outLinks):
@@ -337,3 +430,4 @@ def logEvent(event, url, failure_reason = None, status = None):
 
 
 crawler('https://www.kennesaw.edu/', pageCount, budget) # Commented out till ready
+
