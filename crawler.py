@@ -282,15 +282,19 @@ def redirectHandler(url, robot_skips, maxHops = 5):
     while hopCount < maxHops:
         if url in visited:
             logEvent('error', url, 'redirect loop detected')
-            return None
+            return None, robot_skips
         else:
             host = urllib.parse.urlsplit(url).netloc
             scheme = urllib.parse.urlsplit(url).scheme
             robotsResult = checkRobots(robotsCache, host, scheme)
 
 
-            if not isinstance(robotsResult, Protego) or not robotsResult.can_fetch(url, myInfo):
-                logEvent('skip', url, failure_reason = 'robots.txt disallowed')
+            if not isinstance(robotsResult, Protego):
+                logEvent('skip', url, failure_reason='robots.txt unavailable')
+                robot_skips += 1
+                return None, robot_skips
+            if not  robotsResult.can_fetch(url, myInfo):
+                logEvent('skip', url, failure_reason='robots.txt disallowed')
                 robot_skips += 1
                 return None, robot_skips
             visited.append(url)
@@ -304,10 +308,10 @@ def redirectHandler(url, robot_skips, maxHops = 5):
                     check = requests.get(url, headers={'User-Agent': myInfo}, timeout= 10.0, allow_redirects=False, stream = True)
             except requests.exceptions.Timeout:
                 logEvent('error', url, failure_reason= 'Timeout', status=None)
-                return None
+                return None, robot_skips
             except requests.exceptions.RequestException:
                 logEvent('error', url, failure_reason='Exception', status=None)
-                return None
+                return None, robot_skips
 
             if 300 <= check.status_code < 400:
 
@@ -322,7 +326,7 @@ def redirectHandler(url, robot_skips, maxHops = 5):
                         logEvent('error', url, failure_reason='redirect off domain')
 
                         check.close()
-                        return None
+                        return None, robot_skips
 
                     hopCount += 1
 
@@ -331,7 +335,7 @@ def redirectHandler(url, robot_skips, maxHops = 5):
                 else:
                     logEvent('error', url, failure_reason ='missing location')
                     check.close()
-                    return None
+                    return None, robot_skips
 
             if check.status_code == 429 or check.status_code == 503:
 
@@ -375,11 +379,11 @@ def redirectHandler(url, robot_skips, maxHops = 5):
                 except requests.exceptions.Timeout:
                     logEvent('error', url, failure_reason='Timeout',
                              status=None)
-                    return None
+                    return None, robot_skips
                 except requests.exceptions.RequestException:
                     logEvent('error', url, failure_reason='Exception',
                              status=None)
-                    return None
+                    return None, robot_skips
 
                 if 300 <= check.status_code < 400:
 
@@ -393,7 +397,7 @@ def redirectHandler(url, robot_skips, maxHops = 5):
                         if not (host == 'kennesaw.edu' or host.endswith('.kennesaw.edu')):
                             logEvent('error', url, failure_reason='redirect off domain')
                             check.close()
-                            return None
+                            return None, robot_skips
 
                         hopCount += 1
                         check.close()
@@ -401,21 +405,21 @@ def redirectHandler(url, robot_skips, maxHops = 5):
                     else:
                         logEvent('error', url, failure_reason='missing location')
                         check.close()
-                        return None
+                        return None, robot_skips
 
                 if check.status_code != 429 and check.status_code != 503:
-                    return check
+                    return check, robot_skips
                 # If there is a second 429/503 error send out as too many requests otherwise pass it on
                 if check.status_code == 429 or check.status_code == 503:
                     logEvent('error', url, failure_reason='too many retries',
                              status=check.status_code)
                     check.close()
-                    return None
+                    return None, robot_skips
 
             else:
-                return check
+                return check, robot_skips
     logEvent('error', url, failure_reason='exceeded hop counts')
-    return None
+    return None, robot_skips
 
 def buildRecord(page, soup, canon, outLinks):
     title = soup.title.string if soup.title is not None else ''
