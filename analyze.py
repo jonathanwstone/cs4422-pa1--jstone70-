@@ -1,48 +1,99 @@
 import argparse
 import json
 import collections
+from urllib.parse import urlparse, parse_qsl
+import re
 
-def loadMyFile(crawl):
-    crawlLog =[]
-    counter = 0
-    with open(crawl, 'r', encoding = 'utf-8') as json_data:
-        for line in json_data:
+parser = argparse.ArgumentParser(description='Web Crawler Analysis')
+
+def loadJson(file):
+    useable = []
+    with open(file, "r", encoding= 'utf-8') as jsonFile:
+
+        for line in jsonFile:
             line = line.strip()
             if not line:
                 continue
             else:
                 try:
-                    printable = json.loads(line)
-                    crawlLog.append(printable)
-
+                    line = json.loads(line)
+                    useable.append(line)
                 except json.JSONDecodeError:
-                    counter+=1
                     continue
-    return crawlLog, counter
-def loadStatsData(stats):
-    with open (stats, 'r', encoding = 'utf-8') as json_data:
-        statsData = json.load(json_data)
-        return statsData
+    return useable
 
-def sortFetch(rawFileContents):
-    fetches = []
-    robotFetches = []
-    for line in rawFileContents:
-        if line['event'] == ('fetch')and not line['url'].endswith('/robots.txt'):
-            fetches.append(line)
-        if line['event'] == ('fetch')and line['url'].endswith('/robots.txt'):
-            robotFetches.append(line)
+def analyzeEvents(crawl):
+    collect = collections.Counter([])
+    for event in crawl:
+        if event['event']:
+            collect[event['event']]+=1
+    return collect
 
-    return fetches, robotFetches
+def analyzeFailures(crawl):
+    collect = collections.Counter([])
+    for event in crawl:
+        if event['event'] == 'error':
+            collect[event['failure_reason']]+=1
+    return collect.most_common( 5)
 
-parser = argparse.ArgumentParser(description = 'Web Crawler Analysis')
+def analyzeDupes(pages):
+    collect = collections.Counter([])
+    for page in pages:
+        if page['word_count'] != 0:
+            collect[page['content_hash']]+=1
+    return collect.most_common(5)
+
+def countDuplicateGroups(pages):
+    collect = collections.Counter([])
+    duplicateGroups = 0
+    for page in pages:
+        if page['word_count'] > 0:
+            collect[page['content_hash']]+=1
+    for item in collect:
+        if collect[item] > 1:
+            duplicateGroups +=1
+    return duplicateGroups
+
+def countDuplicatePages(pages):
+    counter = collections.Counter([])
+    count = 0
+    for page in pages:
+        if page["word_count"] !=0:
+            counter[page['content_hash']]+=1
+    for object in counter:
+        if counter[object]>1:
+            count+=counter[object]
+    return count
+
+def duplicateHashCheck(pages, dupes):
+    collect = []
+    for dupe in dupes:
+        for page in pages:
+            if dupe[0] == page['content_hash']:
+                pageInfo = {
+                    'url': page['url_canonical'],
+                    'canonical_link': page['canonical_link'],
+                    'word_count': page['word_count']
+                }
+                collect.append(pageInfo)
+    return collect
+
 
 if __name__ == "__main__":
-    parser.add_argument('--pages', default = 'artifacts/pages.jsonl', help = 'Page file')
-    parser.add_argument('--crawl', default='artifacts/crawl.log', help='Crawl log file')
-    parser.add_argument('--stats', default='artifacts/stats.jsonl', help='Crawler final stats file')
+    parser.add_argument('--pages', default='artifacts/pages.jsonl',
+                        help='Page file')
+    parser.add_argument('--crawl', default='artifacts/crawl.log',
+                        help='Crawl log file')
+    parser.add_argument('--stats', default='artifacts/stats.jsonl',
+                        help='Crawler final stats file')
 
     args = parser.parse_args()
+    crawl = loadJson(args.crawl)
+    pages = loadJson(args.pages)
+    stats = loadJson(args.stats)
 
-    fileContents, skipped = loadMyFile(args.crawl)
-    sortFetch(fileContents)
+    crawlLog = analyzeEvents(crawl)
+    failures = analyzeFailures(crawl)
+    dupes = analyzeDupes(pages)
+    hash = countDuplicateGroups(pages)
+    print(duplicateHashCheck(pages, dupes))
