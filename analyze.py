@@ -36,7 +36,12 @@ def analyzeFailures(crawl):
         if event['event'] == 'error':
             if 'retrying' in event['failure_reason'] or event['url'].endswith("/robots.txt"):
                 continue
-            collect[event['failure_reason']]+=1
+            label = event['failure_reason']
+
+            if label is not None:
+              label = event['failure_reason'],event['status']
+
+            collect[label]+=1
     return collect.most_common( 5)
 
 def analyzeDupes(pages):
