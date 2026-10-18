@@ -4,7 +4,7 @@ import collections
 import urllib
 from urllib.parse import urlparse, parse_qsl
 import re
-
+from datetime import datetime
 parser = argparse.ArgumentParser(description='Web Crawler Analysis')
 
 def loadJson(file):
@@ -119,6 +119,7 @@ def analyzeUrlPatterns(pages):
     for pattern in patterns:
         Tracker.append((pattern,(len(patterns[pattern]["url"]),len(patterns[pattern]["hashes"]))))
     Tracker.sort(key =lambda patterns: patterns[1][0], reverse = True)
+    Tracker = Tracker[0:9]
     return Tracker
 
 def getShingles(text, k=3):
@@ -138,6 +139,89 @@ def jaccardSim(text1,text2):
 
     return jaccard
 
+def analyzeFailureHosts(crawl):
+    collect = collections.Counter([])
+    for entry in crawl:
+        if entry['status'] == 403 and not entry['url'].endswith("/robots.txt"):
+            collect[urlparse(entry['url']).netloc] +=1
+    return collect.most_common(5)
+
+def analyzeGaps(crawl):
+    storage = {}
+
+    for item in crawl:
+        if item['event'] != 'fetch' or item['url'].endswith("/robots.txt"):
+            continue
+        else:
+            if urlparse(item['url']).netloc not in storage:
+                timestamp = datetime.fromisoformat(item['time_stamp'])
+                timestamp = datetime.timestamp(timestamp)
+                host = urlparse(item['url']).netloc
+                storage[host] = []
+                storage[host].append(timestamp)
+
+            else:
+                name = urlparse(item['url']).netloc
+                timestamp = datetime.fromisoformat(item['time_stamp'])
+                timestamp = datetime.timestamp(timestamp)
+                storage[name].append(timestamp)
+
+    return storage
+
+def floorGap(storage):
+
+    exception = {
+        "catalog.kennesaw.edu": 120,
+        "bookstore.kennesaw.edu": 10.0
+    }
+
+    default = 1.0
+
+    for host, times in storage.items():
+        if len(times) < 2:
+            continue
+        sortTime = sorted(times)
+
+        gap = [t2 -t1 for t1, t2 in zip(sortTime, sortTime[1:])]
+
+        floor = exception.get(host, default)
+
+        fetches = len(sortTime)
+        smallestGap = min(gap)
+        underFloor = sum(1 for item in gap if item < floor)
+
+        print(f"Host: {host}", f" fetches: {fetches}", f" Smallest gap: {smallestGap:.3f}",f"Floor: {floor}" ,f" Under floor: {underFloor}")
+
+def analyzeRobotsSkips(crawl):
+    collection = collections.Counter([])
+    for item in crawl:
+        if item['event'] == 'skip':
+            host = urlparse(item['url']).netloc
+            if 'disallow' in item['failure_reason']:
+                collection[(host, 'disallowed')]+=1
+            if ('unavailable' in item['failure_reason']) or ('could not be retrieved' in item['failure_reason']):
+                collection[(host, 'unavailable')]+=1
+    print(collection.most_common())
+
+def analyzeCrawlRate(crawl,stats):
+    times =[]
+    gaps = []
+    for entry in crawl:
+        time = datetime.fromisoformat(entry['ts']).timestamp()
+        times.append(time)
+
+    for i in range(len(times) - 1):
+        gap = times[i + 1] - times[i]
+        gaps.append(gap)
+    largestGap = max(gaps)
+    index = gaps.index(largestGap)
+    pagesFetched = stats[0]['pages_fetched']
+    timeTaken = stats[0]['Time_Taken']
+
+    takenRate = pagesFetched/timeTaken
+    adjustedRate = pagesFetched/(timeTaken - largestGap)
+
+    return [largestGap, takenRate, crawl[index]['ts'], crawl[index+1]['ts'] ,adjustedRate]
 if __name__ == "__main__":
     parser.add_argument('--pages', default='artifacts/pages.jsonl',
                         help='Page file')
@@ -156,7 +240,7 @@ if __name__ == "__main__":
     duplicateGroups = countDuplicateGroups(pages)
     duplicatePages = countDuplicatePages(pages)
     duplicateExamples = duplicateHashCheck(pages, analyzeDupes(pages))
-
+    rate = analyzeCrawlRate(crawl, stats)
     urlPatterns = analyzeUrlPatterns(pages)
 
     print(len(pages))
@@ -167,3 +251,8 @@ if __name__ == "__main__":
     print(duplicateGroups)
     print(duplicatePages)
     print(analyzeFailures(crawl))
+    print(duplicateExamples)
+    analyzeRobotsSkips(crawl)
+    floorGap(analyzeGaps(crawl))
+    print(rate)
+    print(analyzeFailureHosts(crawl))
