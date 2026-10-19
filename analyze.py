@@ -9,6 +9,8 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import wordpunct_tokenize
 import numpy as np
+import random
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 parser = argparse.ArgumentParser(description='Web Crawler Analysis')
 
@@ -441,7 +443,18 @@ def fitZipf(frequencies):
 
     return exponent, slope, intercept, r2, sortedDeviations[:10]
 
-
+def analyzeTfidf(pages):
+    vectorizer = TfidfVectorizer(stop_words = 'english')
+    sampledPages = random.sample(pages, 5)
+    documents = [page['text'] for page in sampledPages]
+    tfidfMatrix = vectorizer.fit_transform(documents)
+    featureNames = vectorizer.get_feature_names_out()
+    for i, page in enumerate(sampledPages):
+        scores = tfidfMatrix[i].toarray().flatten()
+        sortedScores = np.argsort(scores)[::-1][:5]
+        for i in range(5):
+            print('URL: ', page['url_canonical'])
+            print(featureNames[sortedScores[i]], scores[sortedScores[i]])
 if __name__ == "__main__":
     parser.add_argument('--pages', default='artifacts/pages.jsonl',
                         help='Page file')
@@ -463,22 +476,22 @@ if __name__ == "__main__":
     rate = analyzeCrawlRate(crawl, stats)
     urlPatterns = analyzeUrlPatterns(pages)
 
-    # print(len(pages))
-    # print(len(crawl))
-    # print(analyzeEvents(crawl))
-    # print(stats)
-    # print(urlPatterns)
-    # print(duplicateGroups)
-    # print(duplicatePages)
-    # print(analyzeFailures(crawl))
-    # print(duplicateExamples)
-    # analyzeRobotsSkips(crawl)
-    # floorGap(analyzeGaps(crawl))
-    # print(rate)
-    # print(analyzeFailureHosts(crawl))
-    # print(topOutgoing(pages))
-    # print(topIncoming(pages))
-    # countZeroWordPages(pages)
+    print(len(pages))
+    print(len(crawl))
+    print(analyzeEvents(crawl))
+    print(stats)
+    print(urlPatterns)
+    print(duplicateGroups)
+    print(duplicatePages)
+    print(analyzeFailures(crawl))
+    print(duplicateExamples)
+    analyzeRobotsSkips(crawl)
+    floorGap(analyzeGaps(crawl))
+    print(rate)
+    print(analyzeFailureHosts(crawl))
+    print(topOutgoing(pages))
+    print(topIncoming(pages))
+    countZeroWordPages(pages)
     boilerplate = analyzeRepeatedLines(pages)
     print("Mean words before removal:", meanOriginalWordCount(pages))
     print("Mean words after removal:", meanPostRemoval(pages, boilerplate))
@@ -509,4 +522,26 @@ if __name__ == "__main__":
     print(r2StopRemoved)
     print("Biggest deviations without stops removed ", deviations)
     print("Biggest deviations with stops removed",deviationsStopRemoved)
-    # print('Zipf for stop words not removed: ' + + 'Zipf for stop words removed: ' + )
+    print(analyzeTfidf(pages))
+
+    from collections import Counter
+
+    hash_counts = Counter(
+        page["content_hash"]
+        for page in pages
+        if page["word_count"] > 0
+    )
+
+    duplicate_groups = sum(
+        count > 1 for count in hash_counts.values()
+    )
+
+    excess_duplicate_pages = sum(
+        count - 1
+        for count in hash_counts.values()
+        if count > 1
+    )
+
+    print("Exact normalized-text duplicate groups:", duplicate_groups)
+    print("Excess duplicate pages:", excess_duplicate_pages)
+    print("Percentage of fetched pages:", excess_duplicate_pages / len(pages) * 100)
